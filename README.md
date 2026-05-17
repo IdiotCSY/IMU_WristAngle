@@ -30,9 +30,8 @@
 
 ```text
 IMU_WristAngle/
-├── LIBRARY/              # 工具函数库
-├── SIMULINK/             # Simulink 仿真模型
-├── motion_case/          # 仿真运动案例
-├── main_GI_two_imu.m     # 双 IMU GI 主脚本
-├── main_MH_adaptive_two_imu.m # 自适应 MH 主脚本
+├── experiment/       # 实物实验代码
+├── model/            # 打印件模型
+├── simulation/       # Simulink 仿真
+├── 调研资料/          # 资料
 └── README.md
