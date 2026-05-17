@@ -1,0 +1,220 @@
+% motion_case_01.m
+%
+% Function: 预生成运动案例1
+% 
+% 四元数约定：
+% q = [w x y z]，标量在前。
+% q_arm_true   : 臂相对于世界的姿态
+% q_wrist_true : 手相对于臂的相对姿态，即目标真值
+% q_hand_true  : 手相对于世界的姿态
+%
+% 组合关系：
+% q_hand_true = q_arm_true ⊗ q_wrist_true
+%
+% Author:    Chen Shuyi
+% Date:      2026-5-12
+function traj = motion_case_01(cfg)
+
+if nargin < 1
+    cfg = struct();
+end
+
+if ~isfield(cfg, 'Ts')
+    cfg.Ts = 0.01;
+end
+
+if ~isfield(cfg, 'T')
+    cfg.T = 20;
+end
+
+Ts = cfg.Ts;
+T  = cfg.T;
+
+t = (0:Ts:T)';
+N = length(t);
+deg = pi/180;
+
+q_arm_true   = zeros(N,4);
+q_wrist_true = zeros(N,4);
+q_hand_true  = zeros(N,4);
+
+eul_arm_true_deg   = zeros(N,3);
+eul_wrist_true_deg = zeros(N,3);
+eul_hand_true_deg  = zeros(N,3);
+
+for k = 1:N
+    tk = t(k);
+
+    % 1. 手臂相对于世界的姿态：3自由度背景运动
+    % 欧拉角顺序采用 ZYX，即 R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    arm_roll  = 15 * sin(0.50 * tk);   % deg
+    arm_pitch = 20 * sin(0.35 * tk);   % deg
+    arm_yaw   = 25 * sin(0.20 * tk);   % deg
+
+    % 2. 手腕相对于手臂的姿态：第一版只做1自由度屈伸
+    wrist_roll  = 0;
+    wrist_pitch = 30 * sin(0.80 * tk); % deg，暂时把pitch理解为屈伸方向
+    wrist_yaw   = 0;
+
+    q_arm_true(k,:) = eulZYX_to_quat( ...
+        arm_roll*deg, arm_pitch*deg, arm_yaw*deg);
+
+    q_wrist_true(k,:) = eulZYX_to_quat( ...
+        wrist_roll*deg, wrist_pitch*deg, wrist_yaw*deg);
+
+    eul_arm_true_deg(k,:) = [arm_roll, arm_pitch, arm_yaw];
+    eul_wrist_true_deg(k,:) = [wrist_roll, wrist_pitch, wrist_yaw];
+end
+
+% 保证四元数符号连续，避免 q 和 -q 跳变影响角速度反算
+q_arm_true = quat_make_continuous(q_arm_true);
+q_wrist_true = quat_make_continuous(q_wrist_true);
+
+% 由 q_hand = q_arm ⊗ q_wrist 得到手部世界姿态
+for k = 1:N
+    q_hand_true(k,:) = quat_mul(q_arm_true(k,:), q_wrist_true(k,:));
+end
+
+q_hand_true = quat_make_continuous(q_hand_true);
+
+% 由姿态序列反算陀螺仪真实角速度，单位 rad/s
+% 这里角速度是在各自 IMU/刚体坐标系下表达的，符合陀螺仪输出习惯
+omega_arm_true  = quat_sequence_to_body_omega(q_arm_true, Ts);
+omega_hand_true = quat_sequence_to_body_omega(q_hand_true, Ts);
+omega_wrist_rel_true = quat_sequence_to_body_omega(q_wrist_true, Ts);
+
+% 手部欧拉角仅用于观察，不作为目标量
+for k = 1:N
+    eul_hand_true_deg(k,:) = quat_to_eulZYX(q_hand_true(k,:)) / deg;
+end
+
+traj.name = 'motion_case_01';
+traj.description = 'Arm 3-DOF background motion + wrist 1-DOF relative flexion';
+
+traj.Ts = Ts;
+traj.T = T;
+traj.t = t;
+traj.N = N;
+
+traj.q_arm_true = q_arm_true;
+traj.q_wrist_true = q_wrist_true;
+traj.q_hand_true = q_hand_true;
+
+traj.omega_arm_true = omega_arm_true;
+traj.omega_hand_true = omega_hand_true;
+traj.omega_wrist_rel_true = omega_wrist_rel_true;
+
+traj.eul_arm_true_deg = eul_arm_true_deg;
+traj.eul_wrist_true_deg = eul_wrist_true_deg;
+traj.eul_hand_true_deg = eul_hand_true_deg;
+
+end
+
+%% ===== 工具函数 =====
+
+function q = eulZYX_to_quat(roll, pitch, yaw)
+% R = Rz(yaw) * Ry(pitch) * Rx(roll)
+
+qx = [cos(roll/2),  sin(roll/2), 0, 0];
+qy = [cos(pitch/2), 0, sin(pitch/2), 0];
+qz = [cos(yaw/2),   0, 0, sin(yaw/2)];
+
+q = quat_mul(qz, quat_mul(qy, qx));
+q = q / norm(q);
+end
+
+function eul = quat_to_eulZYX(q)
+% 输出 [roll pitch yaw]，单位 rad
+
+q = q / norm(q);
+
+w = q(1);
+x = q(2);
+y = q(3);
+z = q(4);
+
+R11 = 1 - 2*(y^2 + z^2);
+R21 = 2*(x*y + w*z);
+R31 = 2*(x*z - w*y);
+R32 = 2*(y*z + w*x);
+R33 = 1 - 2*(x^2 + y^2);
+
+pitch = asin(-R31);
+roll  = atan2(R32, R33);
+yaw   = atan2(R21, R11);
+
+eul = [roll, pitch, yaw];
+end
+
+function q = quat_mul(q1, q2)
+% 四元数乘法 q = q1 ⊗ q2，标量在前
+
+w1 = q1(1); 
+v1 = q1(2:4);
+
+w2 = q2(1); 
+v2 = q2(2:4);
+
+q = [ ...
+    w1*w2 - dot(v1,v2), ...
+    w1*v2 + w2*v1 + cross(v1,v2) ...
+];
+
+q = q / norm(q);
+end
+
+function qc = quat_conj(q)
+qc = [q(1), -q(2), -q(3), -q(4)];
+end
+
+function Q = quat_make_continuous(Q)
+% 避免相邻四元数符号突然翻转
+
+for k = 2:size(Q,1)
+    if dot(Q(k,:), Q(k-1,:)) < 0
+        Q(k,:) = -Q(k,:);
+    end
+end
+end
+
+function omega = quat_sequence_to_body_omega(Q, Ts)
+% 由姿态序列反算体坐标系下角速度
+% q_next = q_current ⊗ dq_body
+% dq_body = q_current^{-1} ⊗ q_next
+
+N = size(Q,1);
+omega = zeros(N,3);
+
+for k = 1:N-1
+    dq = quat_mul(quat_conj(Q(k,:)), Q(k+1,:));
+
+    if dq(1) < 0
+        dq = -dq;
+    end
+
+    rotvec = quat_to_rotvec(dq);
+    omega(k,:) = rotvec / Ts;
+end
+
+omega(N,:) = omega(N-1,:);
+end
+
+function r = quat_to_rotvec(q)
+% 四元数转旋转向量，输出单位 rad
+
+q = q / norm(q);
+
+if q(1) < 0
+    q = -q;
+end
+
+v_norm = norm(q(2:4));
+angle = 2 * atan2(v_norm, q(1));
+
+if v_norm < 1e-12
+    r = [0, 0, 0];
+else
+    axis = q(2:4) / v_norm;
+    r = angle * axis;
+end
+end
