@@ -69,8 +69,9 @@ mh = struct();
 % % 第一版建议 Ki = 0，避免积分项引入额外慢漂
 % mh.Kp = 0.5;
 % mh.Ki = 0.0;
+% mh.Kp = 1.5;%0.08
 mh.Kp = 0.08;
-mh.Ki = 0.0;
+mh.Ki = 0;
 
 mh.accTol = 0.4;        % 原来 1.0，改严格
 mh.gyroTolDeg = 30;     % 原来 120，改严格
