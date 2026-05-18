@@ -20,10 +20,10 @@ clear; clc; close all;
 
 %% 1. 加载数据
 
-fileName = fullfile('results', 'limit_point_validation_20260517_183323.mat');
+fileName = fullfile('results', 'limit_point_validation_20260517_221943.mat');
 
 if ~isfile(fileName)
-    fileName = 'limit_point_validation_20260517_183323.mat';
+    fileName = 'limit_point_validation_20260517_221943.mat';
 end
 
 load(fileName);
@@ -41,6 +41,21 @@ if isempty(Events)
 end
 
 %% 2. 提取 Events 数据
+%% 可选：删除位置6的最后两个验证事件
+
+removePos6LastTwo = true;
+
+if removePos6LastTwo
+    idx6 = find([Events.pointID] == 6);
+
+    if numel(idx6) >= 2
+        removeIdx = idx6(end-1:end);
+        Events(removeIdx) = [];
+        fprintf("已删除位置6的最后两个验证事件。\n");
+    else
+        warning("位置6的验证事件不足两个，未删除。");
+    end
+end
 
 nEvent = numel(Events);
 
