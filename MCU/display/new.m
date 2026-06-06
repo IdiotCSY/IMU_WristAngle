@@ -2,13 +2,15 @@
 % STM32 双 IMU 姿态实时接收与绘图
 %
 % STM32 输出格式：
-%   ATT,roll,pitch,yaw,theta,handCnt,armCnt,handBad,armBad
+%   ATT,roll,pitch,yaw,theta,handCnt,armCnt,handBad,armBad,...
+%       handOverflow,armOverflow,handHz,armHz,handDtErrUs,armDtErrUs
 %
 % MATLAB 功能：
-%   1. 接收 STM32 发来的 ATT 数据；
-%   2. 实时绘制 roll / pitch / yaw / theta；
-%   3. 按 z 向 STM32 发送置零命令；
-%   4. 关闭图窗后自动退出程序并释放串口。
+%   1. 接收 STM32 输出的相对姿态；
+%   2. 实时绘制欧拉角、轴角；
+%   3. 实时绘制 hand / arm 的平均 dt 误差；
+%   4. 按 z 向 STM32 发送置零命令；
+%   5. 关闭图窗后自动退出并释放串口。
 
 clear; clc; close all;
 
@@ -18,12 +20,10 @@ comName = "COM9";
 baudRate = 115200;
 
 s = serialport(comName, baudRate, "Timeout", 0.05);
-
-% STM32 输出 \r\n，这里用 CR/LF 更严格
 configureTerminator(s, "CR/LF");
 
-% 正点原子板载 CH340：必须关闭 DTR / RTS
-% 否则可能影响复位/运行状态，导致 MATLAB 收不到数据
+% 正点原子板载 CH340 需要关闭 DTR / RTS
+% 否则 MATLAB 打开串口后可能影响复位/运行状态
 setDTR(s, false);
 setRTS(s, false);
 
@@ -39,7 +39,7 @@ fprintf("关闭图窗：结束程序并释放串口。\n\n");
 
 %% 2. 数据缓存
 
-maxPoints = 1000;
+maxPoints = 1200;
 
 tBuf     = nan(maxPoints, 1);
 rollBuf  = nan(maxPoints, 1);
@@ -55,6 +55,21 @@ armBadBuf  = nan(maxPoints, 1);
 handOverflowBuf = nan(maxPoints, 1);
 armOverflowBuf  = nan(maxPoints, 1);
 
+handHzBuf = nan(maxPoints, 1);
+armHzBuf  = nan(maxPoints, 1);
+
+handDtErrUsBuf = nan(maxPoints, 1);
+armDtErrUsBuf  = nan(maxPoints, 1);
+
+handDmaGyroBuf = nan(maxPoints, 1);
+armDmaGyroBuf  = nan(maxPoints, 1);
+
+handDmaAvgGyroBuf = nan(maxPoints, 1);
+armDmaAvgGyroBuf  = nan(maxPoints, 1);
+
+handDmaMaxGyroBuf = nan(maxPoints, 1);
+armDmaMaxGyroBuf  = nan(maxPoints, 1);
+
 idx = 0;
 tStart = tic;
 
@@ -64,17 +79,13 @@ fig = figure( ...
     "Name", "STM32 Dual IMU Realtime Display", ...
     "Color", "w");
 
-% 用 UserData 存运行状态和串口对象
 fig.UserData.stopRequested = false;
 fig.UserData.serialObj = s;
 
-% WindowKeyPressFcn 比 KeyPressFcn 更稳定
 fig.WindowKeyPressFcn = @(src, event) key_callback(src, event);
-
-% 关闭图窗时先设置停止标志，再删除图窗
 fig.CloseRequestFcn = @(src, event) close_callback(src, event);
 
-tl = tiledlayout(fig, 2, 1);
+tl = tiledlayout(fig, 4, 1);
 tl.TileSpacing = "compact";
 tl.Padding = "compact";
 
@@ -107,11 +118,43 @@ title(axTheta, "STM32 输出相对轴角");
 ylim(axTheta, [0 180]);
 yticks(axTheta, 0:30:180);
 
+% dt 误差图
+axDt = nexttile(tl, 3);
+hold(axDt, "on");
+grid(axDt, "on");
+
+hHandDt = plot(axDt, nan, nan, "r", "LineWidth", 1.2);
+hArmDt  = plot(axDt, nan, nan, "b", "LineWidth", 1.2);
+
+xlabel(axDt, "时间 (s)");
+ylabel(axDt, "平均 dt 误差 (\mus)");
+title(axDt, "实际平均 dt 与理论 dt 的误差");
+legend(axDt, "hand dt error", "arm dt error", "Location", "best");
+
+% 先给一个较宽范围，后面可以根据实际误差调
+ylim(axDt, [-1000 1000]);
+yticks(axDt, -1000:250:1000);
+
+% DMA 单次接收 GYRO 帧数图
+axDma = nexttile(tl, 4);
+hold(axDma, "on");
+grid(axDma, "on");
+
+hHandDmaGyro = plot(axDma, nan, nan, "r", "LineWidth", 1.2);
+hArmDmaGyro  = plot(axDma, nan, nan, "b", "LineWidth", 1.2);
+
+xlabel(axDma, "时间 (s)");
+ylabel(axDma, "每次 DMA 解析出的 GYRO 帧数");
+title(axDma, "DMA 单次接收包含的 GYRO 帧数");
+legend(axDma, "hand", "arm", "Location", "best");
+
+ylim(axDma, [0 8]);
+yticks(axDma, 0:1:8);
+
 %% 4. 主循环：接收 + 解析 + 绘图
 
 while true
 
-    % 图窗已关闭或请求停止，则退出循环
     if ~ishandle(fig)
         break;
     end
@@ -120,14 +163,12 @@ while true
         break;
     end
 
-    % 没有数据时也要 drawnow，让按键/关闭事件能被处理
     if s.NumBytesAvailable <= 0
         drawnow limitrate;
         pause(0.005);
         continue;
     end
 
-    % 读取一行。若偶发超时，跳过本轮
     try
         line = readline(s);
     catch
@@ -137,7 +178,7 @@ while true
 
     line = strtrim(line);
 
-    % 非 ATT 行，例如启动提示、ZERO SET，直接显示
+    % 启动提示、ZERO SET 等非 ATT 行，直接显示
     if ~startsWith(line, "ATT")
         if strlength(line) > 0
             disp(line);
@@ -154,6 +195,10 @@ while true
         continue;
     end
 
+    % data =
+    % [roll pitch yaw theta handCnt armCnt handBad armBad ...
+    %  handOverflow armOverflow handHz armHz handDtErrUs armDtErrUs]
+
     roll  = data(1);
     pitch = data(2);
     yaw   = data(3);
@@ -167,7 +212,24 @@ while true
     handOverflow = data(9);
     armOverflow  = data(10);
 
-    % 写入环形缓存
+    handHz = data(11);
+    armHz  = data(12);
+
+    handDtErrUs = data(13);
+    armDtErrUs  = data(14);
+
+    handDmaBytes = data(15);
+    armDmaBytes  = data(16);
+    
+    handDmaGyro = data(17);
+    armDmaGyro  = data(18);
+    
+    handDmaAvgGyro = data(19);
+    armDmaAvgGyro  = data(20);
+    
+    handDmaMaxGyro = data(21);
+    armDmaMaxGyro  = data(22);
+
     idx = idx + 1;
     writeIdx = mod(idx - 1, maxPoints) + 1;
 
@@ -187,7 +249,22 @@ while true
     handOverflowBuf(writeIdx) = handOverflow;
     armOverflowBuf(writeIdx)  = armOverflow;
 
-    % 按时间顺序取有效数据
+    handHzBuf(writeIdx) = handHz;
+    armHzBuf(writeIdx)  = armHz;
+
+    handDtErrUsBuf(writeIdx) = handDtErrUs;
+    armDtErrUsBuf(writeIdx)  = armDtErrUs;
+
+    handDmaGyroBuf(writeIdx) = handDmaGyro;
+    armDmaGyroBuf(writeIdx)  = armDmaGyro;
+    
+    handDmaAvgGyroBuf(writeIdx) = handDmaAvgGyro;
+    armDmaAvgGyroBuf(writeIdx)  = armDmaAvgGyro;
+    
+    handDmaMaxGyroBuf(writeIdx) = handDmaMaxGyro;
+    armDmaMaxGyroBuf(writeIdx)  = armDmaMaxGyro;
+
+    % 取有效数据并按时间排序
     valid = ~isnan(tBuf);
 
     tPlot     = tBuf(valid);
@@ -196,6 +273,18 @@ while true
     yawPlot   = yawBuf(valid);
     thetaPlot = thetaBuf(valid);
 
+    handDtPlot = handDtErrUsBuf(valid);
+    armDtPlot  = armDtErrUsBuf(valid);
+
+    handDmaGyroPlot = handDmaGyroBuf(valid);
+    armDmaGyroPlot  = armDmaGyroBuf(valid);
+    
+    handDmaAvgGyroPlot = handDmaAvgGyroBuf(valid);
+    armDmaAvgGyroPlot  = armDmaAvgGyroBuf(valid);
+    
+    handDmaMaxGyroPlot = handDmaMaxGyroBuf(valid);
+    armDmaMaxGyroPlot  = armDmaMaxGyroBuf(valid);
+
     [tPlot, order] = sort(tPlot);
 
     rollPlot  = rollPlot(order);
@@ -203,11 +292,29 @@ while true
     yawPlot   = yawPlot(order);
     thetaPlot = thetaPlot(order);
 
+    handDtPlot = handDtPlot(order);
+    armDtPlot  = armDtPlot(order);
+
+    handDmaGyroPlot = handDmaGyroPlot(order);
+    armDmaGyroPlot  = armDmaGyroPlot(order);
+    
+    handDmaAvgGyroPlot = handDmaAvgGyroPlot(order);
+    armDmaAvgGyroPlot  = armDmaAvgGyroPlot(order);
+    
+    handDmaMaxGyroPlot = handDmaMaxGyroPlot(order);
+    armDmaMaxGyroPlot  = armDmaMaxGyroPlot(order);
+
     % 更新曲线
     set(hRoll,  "XData", tPlot, "YData", rollPlot);
     set(hPitch, "XData", tPlot, "YData", pitchPlot);
     set(hYaw,   "XData", tPlot, "YData", yawPlot);
     set(hTheta, "XData", tPlot, "YData", thetaPlot);
+
+    set(hHandDt, "XData", tPlot, "YData", handDtPlot);
+    set(hArmDt,  "XData", tPlot, "YData", armDtPlot);
+
+    set(hHandDmaGyro, "XData", tPlot, "YData", handDmaGyroPlot);
+    set(hArmDmaGyro,  "XData", tPlot, "YData", armDmaGyroPlot);
 
     % 只显示最近 12 秒
     showWindow = 12;
@@ -215,19 +322,32 @@ while true
     if tNow > showWindow
         xlim(axEuler, [tNow - showWindow, tNow]);
         xlim(axTheta, [tNow - showWindow, tNow]);
+        xlim(axDt,    [tNow - showWindow, tNow]);
+        xlim(axDma, [tNow - showWindow, tNow]);
     else
         xlim(axEuler, [0, showWindow]);
         xlim(axTheta, [0, showWindow]);
+        xlim(axDt,    [0, showWindow]);
+        xlim(axDma, [0, showWindow]);
     end
 
-   title(axTheta, sprintf( ...
-    "STM32轴角 | handCnt=%d armCnt=%d bad=[%d %d] overflow=[%d %d]", ...
-    handCnt, armCnt, handBad, armBad, handOverflow, armOverflow));
+    title(axTheta, sprintf( ...
+        "轴角 | cnt=[%d %d] bad=[%d %d] overflow=[%d %d]", ...
+        handCnt, armCnt, handBad, armBad, handOverflow, armOverflow));
+
+    title(axDt, sprintf( ...
+        "dt误差 | handHz=%.2f armHz=%.2f | dtErr=[%.1f %.1f] us", ...
+        handHz, armHz, handDtErrUs, armDtErrUs));
+
+    title(axDma, sprintf( ...
+    "DMA解析GYRO帧数 | last=[%d %d] avg=[%.2f %.2f] max=[%d %d]", ...
+    handDmaGyro, armDmaGyro, ...
+    handDmaAvgGyro, armDmaAvgGyro, ...
+    handDmaMaxGyro, armDmaMaxGyro));
 
     drawnow limitrate;
 end
 
-% 如果是通过 stopRequested 退出，但图窗还在，则删除图窗
 if exist("fig", "var") && ishandle(fig)
     delete(fig);
 end
@@ -239,30 +359,56 @@ fprintf("程序已停止。\n");
 function data = parse_att_line(line)
 % 解析 STM32 输出的 ATT 行
 %
-% 当前 STM32 输出格式：
-%   ATT,roll,pitch,yaw,theta,handCnt,armCnt,handBad,armBad,handOverflow,armOverflow
+% 兼容三种格式：
 %
-% 输出：
-%   data = [roll pitch yaw theta handCnt armCnt handBad armBad handOverflow armOverflow]
+% 旧格式 1：
+%   ATT + 8 个数字
+%
+% 旧格式 2：
+%   ATT + 10 个数字，包含 overflow
+%
+% 当前格式：
+%   ATT + 22 个数字，包含 dt误差 和 DMA单次接收监测
+%
+% 最终统一输出 22 个数字：
+%
+% data =
+% [roll pitch yaw theta ...
+%  handCnt armCnt handBad armBad ...
+%  handOverflow armOverflow ...
+%  handHz armHz handDtErrUs armDtErrUs ...
+%  handDmaBytes armDmaBytes ...
+%  handDmaGyro armDmaGyro ...
+%  handDmaAvgGyro armDmaAvgGyro ...
+%  handDmaMaxGyro armDmaMaxGyro]
 
     data = [];
 
     parts = split(line, ",");
 
-    % 正常应有 11 段：
-    % ATT + 10 个数字
-    if numel(parts) < 11
+    if numel(parts) < 9
         return;
     end
 
-    nums = zeros(1, 10);
+    nNum = numel(parts) - 1;
+    nums = zeros(1, nNum);
 
-    for i = 1:10
+    for i = 1:nNum
         nums(i) = str2double(parts{i+1});
     end
 
     if any(isnan(nums))
         return;
+    end
+
+    % 不足 22 个数字就补 0，保证主程序索引不会报错
+    if numel(nums) < 22
+        nums = [nums, zeros(1, 22 - numel(nums))];
+    end
+
+    % 超过 22 个就只取前 22 个
+    if numel(nums) > 22
+        nums = nums(1:22);
     end
 
     data = nums;
@@ -272,11 +418,8 @@ function key_callback(src, event)
 % 图窗按键回调
 %
 % 按 z：
-%   向 STM32 发送 ASCII 字符 z，并附带换行。
-%
-% 用 writeline 比只 write 一个 uint8 更稳，
-% 因为 STM32 端 USART1 使用 ReceiveToIdle_DMA，
-% 发送 z + 换行更容易触发一段完整接收事件。
+%   向 STM32 发送 z + 换行。
+%   STM32 收到后执行 DualIMU_SetZero()。
 
     if ~isfield(src.UserData, "serialObj")
         return;
@@ -296,9 +439,6 @@ end
 
 function close_callback(src, ~)
 % 图窗关闭回调
-%
-% 不直接让程序卡死在 while 里。
-% 先设置 stopRequested，主循环检测到后退出。
 
     if ishandle(src)
         src.UserData.stopRequested = true;
