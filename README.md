@@ -92,7 +92,6 @@ IMU_WristAngle/
 └── README.md
 ```
 
-如果当前仓库中还没有 `mcu/`、`docs/` 或 `references/`，建议后续逐步整理。原有中文目录“调研资料”建议改为 `references/`，便于跨平台和开源展示。
 
 ---
 
@@ -410,11 +409,10 @@ experiment/LIBRARY/imu_realtime_plot_reset.m
 z: reset zero pose / clear realtime curves
 ```
 
-建议后续在 `docs/images/` 中添加实时显示截图：
 
-```markdown
-![realtime_plot](docs/images/realtime_plot.png)
-```
+![realtime_display](images/realtime_display.png)
+
+
 
 ---
 
@@ -480,11 +478,12 @@ post_wrist_imu_sim
 * 球关节连续三自由度测角结构；
 * 视觉或非接触姿态参考方案。
 
-建议后续添加模型截图：
 
-```markdown
-![mechanical_model](docs/images/mechanical_model.png)
-```
+模型B
+![PlanB](images/PlanB.png)
+
+模型C
+![PlanC](images/PlanC.png)
 
 ---
 
