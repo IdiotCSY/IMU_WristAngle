@@ -50,10 +50,14 @@ hand IMU                  arm IMU
          MATLAB 实时显示
 ```
 
-建议后续在 `docs/images/` 中添加系统框图，例如：
+理论计算如下所示
 
 ```markdown
-![system_overview](docs/images/system_overview.png)
+![理论计算1](images/理论计算1.png)
+![理论计算2](images/理论计算2.png)
+![理论计算3](images/理论计算3.png)
+![理论计算4](images/理论计算4.png)
+![理论计算5](images/理论计算5.png)
 ```
 
 ---
