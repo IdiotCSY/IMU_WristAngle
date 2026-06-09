@@ -481,11 +481,11 @@ post_wrist_imu_sim
 
 模型B
 
-![PlanB](images/PlanB.png)
+![PlanB](images/PlanB.PNG)
 
 模型C
 
-![PlanC](images/PlanC.png)
+![PlanC](images/PlanC.PNG)
 
 ---
 
