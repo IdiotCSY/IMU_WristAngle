@@ -52,13 +52,16 @@ hand IMU                  arm IMU
 
 理论计算如下所示
 
-```markdown
-![理论计算1](images/理论计算1.png)
-![理论计算2](images/理论计算2.png)
-![理论计算3](images/理论计算3.png)
-![理论计算4](images/理论计算4.png)
-![理论计算5](images/理论计算5.png)
-```
+![理论计算1](images/理论计算1.jpg)
+
+![理论计算2](images/理论计算2.jpg)
+
+![理论计算3](images/理论计算3.jpg)
+
+![理论计算4](images/理论计算4.jpg)
+
+![理论计算5](images/理论计算5.jpg)
+
 
 ---
 
